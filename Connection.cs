@@ -2,6 +2,7 @@
 using System.Globalization;
 using System.IO;
 using System.Net.Sockets;
+using System.Net.Security;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -9,15 +10,19 @@ namespace VndbClient
 {
     internal class Connection
     {
-        // I'm lazy, so I'm just hard-coding this. Anybody who passes a username/password in cleartext is a madman anyway.
         private static readonly string LoginBufferString = 
-            "login {\"protocol\":1,\"client\":\"FTBVNDBWTFBBQNSFW_Test\",\"clientver\":0.1}";
+            "login {\"protocol\":1,\"client\":\"FTB\",\"clientver\":0.2}";
+        private static readonly string UsernamePasswordLoginPrefix =
+            "login {\"protocol\":1,\"client\":\"FTB\",\"clientver\":0.2,";
+        private static readonly string UsernameFormatString = "\"username\":\"{0}\"";
+        private static readonly string PasswordFormatString = "\"password\":\"{0}\"";
+        private static readonly string UsernamePasswordLoginSuffix = "}";
 
         private TcpClient tcpClient;
         private Stream stream;
 
         private const string VNDBHost = "api.vndb.org";
-        private const ushort VNDBPort = 19534;
+        private const ushort VNDBPort = 19535; // always use TLS, because why not.
 
         public Connection()
         {
@@ -27,12 +32,29 @@ namespace VndbClient
         {
             this.tcpClient = new TcpClient();
             await this.tcpClient.ConnectAsync(Connection.VNDBHost, Connection.VNDBPort);
-            this.stream = this.tcpClient.GetStream();
+            SslStream sslStream = new SslStream(this.tcpClient.GetStream());
+            await sslStream.AuthenticateAsClientAsync("api.vndb.org");
+            this.stream = sslStream;
         }
 
-        public async Task Login()
+        public async Task Login(string username, string password)
         {
-            Response loginResponse = await this.IssueCommandReadResponse(Connection.LoginBufferString);
+            string loginBuffer = null;
+
+            // ugly, but I don't feel like importing a JSON library just for this...
+            if(username != null && password != null)
+            {
+                string userField = String.Format(CultureInfo.InvariantCulture, Connection.UsernameFormatString, username);
+                string passwordField = String.Format(CultureInfo.InvariantCulture, Connection.PasswordFormatString, password);
+
+                loginBuffer = Connection.UsernamePasswordLoginPrefix + userField + "," + passwordField + Connection.UsernamePasswordLoginSuffix;
+            }
+            else
+            {
+                loginBuffer = Connection.LoginBufferString;
+            }
+
+            Response loginResponse = await this.IssueCommandReadResponse(loginBuffer);
 
             if(loginResponse.responseType != VndbProtocol.ResponseType.Ok)
             {
